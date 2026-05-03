@@ -463,14 +463,49 @@
   #mine-area {
     display: flex; flex-direction: column; align-items: center; gap: 8px;
   }
+
+  /* FULLSCREEN MODE — only mine visible */
   #mine-area.mine-fullscreen {
     position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 9000;
     background: var(--bg); padding: 10px; overflow-y: auto;
-    display: flex; flex-direction: column; align-items: center; gap: 8px;
+    display: flex; flex-direction: column; align-items: center; gap: 6px;
   }
-  #mine-area.mine-fullscreen #grid-wrapper {
+  /* Hide everything else when fullscreen is active */
+  body.mine-fs #left-panel,
+  body.mine-fs #right-panel,
+  body.mine-fs #hud-top,
+  body.mine-fs #bottom-bar,
+  body.mine-fs #brainrot-section,
+  body.mine-fs #rng-section,
+  body.mine-fs #chat-widget,
+  body.mine-fs #brainrot-pending-btn,
+  body.mine-fs #toast,
+  body.mine-fs #vip-bar,
+  body.mine-fs #midas-bar-wrap,
+  body.mine-fs #frenzy-bar-wrap,
+  body.mine-fs #event-banner,
+  body.mine-fs #auto-miner-indicator {
+    display: none !important;
+  }
+  /* Make grid expand to fill fullscreen */
+  body.mine-fs #mine-area #grid-wrapper {
     flex: 1; display: flex; align-items: center; justify-content: center;
+    width: 100%; max-width: 900px;
   }
+  body.mine-fs #mine-area #mine-grid {
+    width: 100%; height: 100%;
+  }
+  /* Fullscreen minimize button */
+  #mine-fs-btn {
+    position: fixed; top: 10px; right: 10px; z-index: 9999;
+    background: rgba(0,0,0,0.7); border: 2px solid var(--accent);
+    color: var(--accent); font-size: 13px; font-weight: 800;
+    padding: 8px 14px; border-radius: 8px; cursor: pointer;
+    display: none; backdrop-filter: blur(4px);
+    transition: all 0.15s;
+  }
+  #mine-fs-btn:hover { background: rgba(201,124,245,0.2); }
+  body.mine-fs #mine-fs-btn { display: block; }
   #mine-header {
     width: 100%; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px;
   }
@@ -3392,13 +3427,24 @@ function toggleMineFullscreen() {
   const area = document.getElementById('mine-area');
   const btn  = document.getElementById('btn-mine-fullscreen');
   const isFS = area.classList.toggle('mine-fullscreen');
-  btn.textContent = isFS ? 'X Fechar' : '[ ] Tela Cheia';
+
+  // Toggle body class — CSS handles hiding everything else
+  document.body.classList.toggle('mine-fs', isFS);
+
+  btn.textContent = isFS ? '[ ] Normal' : '[ ] Tela Cheia';
+
   if (isFS) {
     area.scrollTop = 0;
-    document._mineEscHandler = function(e) { if (e.key === 'Escape') toggleMineFullscreen(); };
+    // ESC key to exit
+    document._mineEscHandler = function(e) {
+      if (e.key === 'Escape') toggleMineFullscreen();
+    };
     document.addEventListener('keydown', document._mineEscHandler);
+    // Re-render grid to fit new size
+    requestAnimationFrame(() => { renderGrid(); });
   } else {
     document.removeEventListener('keydown', document._mineEscHandler);
+    requestAnimationFrame(() => { renderGrid(); });
   }
 }
 
@@ -5398,6 +5444,9 @@ window.addEventListener('error', (e) => {
 })();
 
 </script>
+<!-- FULLSCREEN MINIMIZE BUTTON (only visible in fullscreen) -->
+<button id="mine-fs-btn" onclick="toggleMineFullscreen()">✕ Minimizar</button>
+
 <!-- CHAT GLOBAL -->
 <div id="chat-widget">
   <div id="chat-header" onclick="toggleChat()">
