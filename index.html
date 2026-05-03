@@ -11,7 +11,7 @@
            signOut, onAuthStateChanged, updateProfile }
     from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
   import { getFirestore, doc, setDoc, getDoc, collection, query,
-           orderBy, limit, getDocs, serverTimestamp }
+           orderBy, limit, getDocs, serverTimestamp, addDoc, onSnapshot }
     from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
   const firebaseConfig = {
@@ -155,6 +155,31 @@
     if (typeof showToast === 'function') showToast('👋 Saindo...');
   };
 
+  // ── CHAT GLOBAL ─────────────────────────────────────────────────────────
+  window.sendChatMessage = async function(text) {
+    if (!window._fbUser) return;
+    text = text.trim().slice(0, 120);
+    if (!text) return;
+    try {
+      await addDoc(collection(db, 'chat'), {
+        uid: window._fbUser.uid,
+        name: window._fbUser.displayName || window._fbUser.email.split('@')[0],
+        text,
+        ts: serverTimestamp()
+      });
+    } catch(e) { console.error('Chat error:', e); }
+  };
+
+  window.initChat = function() {
+    const q = query(collection(db, 'chat'), orderBy('ts', 'desc'), limit(50));
+    onSnapshot(q, (snap) => {
+      const msgs = [];
+      snap.forEach(d => msgs.push({ id: d.id, ...d.data() }));
+      msgs.reverse();
+      window._renderChat && window._renderChat(msgs);
+    });
+  };
+
   // Signal ready for the classic-script event wiring
   window._firebaseReady = true;
 </script>
@@ -293,6 +318,66 @@
     font-size: 11px; font-weight: 700; letter-spacing: 2px;
     color: var(--muted); text-transform: uppercase; margin-bottom: 8px;
   }
+
+  /* Enchantment collapse */
+  .ench-toggle-btn {
+    width: 100%; background: none; border: 1px solid var(--border);
+    color: var(--muted); font-size: 11px; font-weight: 700;
+    border-radius: 6px; padding: 5px; cursor: pointer; margin-top: 6px;
+    transition: border-color 0.15s, color 0.15s;
+  }
+  .ench-toggle-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .ench-extra { overflow: hidden; transition: max-height 0.3s ease; max-height: 0; }
+  .ench-extra.open { max-height: 400px; }
+
+  /* Chat widget */
+  #chat-widget {
+    position: fixed; bottom: 0; right: 16px; width: 300px; z-index: 8000;
+    display: flex; flex-direction: column;
+    border-radius: 10px 10px 0 0; overflow: hidden;
+    box-shadow: 0 -4px 24px rgba(0,0,0,0.5);
+    border: 1px solid var(--border); border-bottom: none;
+  }
+  #chat-header {
+    background: #1a1d24; padding: 8px 12px;
+    display: flex; align-items: center; justify-content: space-between;
+    cursor: pointer; user-select: none;
+    border-bottom: 1px solid var(--border);
+  }
+  #chat-header-title { font-size: 13px; font-weight: 700; color: var(--text); }
+  #chat-toggle-icon { font-size: 14px; color: var(--muted); }
+  #chat-body {
+    background: #0d0f14; display: flex; flex-direction: column;
+    max-height: 320px; transition: max-height 0.3s ease;
+  }
+  #chat-body.collapsed { max-height: 0; overflow: hidden; }
+  #chat-messages {
+    flex: 1; overflow-y: auto; padding: 8px;
+    display: flex; flex-direction: column; gap: 4px;
+    max-height: 240px; min-height: 100px;
+  }
+  #chat-messages::-webkit-scrollbar { width: 4px; }
+  #chat-messages::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+  .chat-msg { font-size: 12px; line-height: 1.4; word-break: break-word; }
+  .chat-msg-name { font-weight: 700; color: var(--accent); margin-right: 4px; }
+  .chat-msg-text { color: var(--text); }
+  .chat-msg-system { color: var(--muted); font-style: italic; font-size: 11px; }
+  #chat-input-row {
+    display: flex; gap: 6px; padding: 8px;
+    border-top: 1px solid var(--border); background: #111318;
+  }
+  #chat-input {
+    flex: 1; background: #1a1d24; border: 1px solid var(--border);
+    border-radius: 6px; padding: 5px 8px; color: var(--text);
+    font-size: 12px; outline: none;
+  }
+  #chat-input:focus { border-color: var(--accent); }
+  #chat-send-btn {
+    background: var(--accent); border: none; border-radius: 6px;
+    padding: 5px 10px; color: #000; font-size: 12px; font-weight: 700;
+    cursor: pointer;
+  }
+  #chat-send-btn:hover { opacity: 0.85; }
 
   /* Pickaxe */
   #pick-icon { font-size: 32px; text-align: center; }
@@ -1395,42 +1480,46 @@
         <span class="ench-name">Multiplicador</span>
         <span class="ench-lvl" id="e-multi-lvl">0</span>
       </div>
-      <div class="ench-row">
-        <span class="ench-name">Explosão</span>
-        <span class="ench-lvl" id="e-explo-lvl">0</span>
+      <!-- Extra encantamentos colapsaveis -->
+      <div class="ench-extra" id="ench-extra">
+        <div class="ench-row">
+          <span class="ench-name">Explosão</span>
+          <span class="ench-lvl" id="e-explo-lvl">0</span>
+        </div>
+        <div class="ench-row">
+          <span class="ench-name">Midas</span>
+          <span class="ench-lvl" id="e-midas-lvl">0</span>
+        </div>
+        <div class="ench-row">
+          <span class="ench-name">Chaveiro</span>
+          <span class="ench-lvl" id="e-keychain-lvl">0</span>
+        </div>
+        <div class="ench-row">
+          <span class="ench-name" style="color:#ff7700">🔴 Laser</span>
+          <span class="ench-lvl" id="e-laser-lvl">0</span>
+        </div>
+        <div class="ench-row">
+          <span class="ench-name" style="color:#ff4444">🔥 Frenzy</span>
+          <span class="ench-lvl" id="e-frenzy-lvl">0</span>
+        </div>
+        <div class="ench-row">
+          <span class="ench-name" style="color:#ffaa00">💎 Tesouro</span>
+          <span class="ench-lvl" id="e-jackpot-lvl">0</span>
+        </div>
+        <div class="ench-row">
+          <span class="ench-name" style="color:#aaaaff">🧲 Ímã</span>
+          <span class="ench-lvl" id="e-magnet-lvl">0</span>
+        </div>
+        <div class="ench-row">
+          <span class="ench-name" style="color:#88eeee">⚡ Relâmpago</span>
+          <span class="ench-lvl" id="e-lightning-lvl">0</span>
+        </div>
+        <div class="ench-row">
+          <span class="ench-name" style="color:#00ccff">🐬 Golfinho</span>
+          <span class="ench-lvl" id="e-golfinho-lvl">0</span>
+        </div>
       </div>
-      <div class="ench-row">
-        <span class="ench-name">Midas</span>
-        <span class="ench-lvl" id="e-midas-lvl">0</span>
-      </div>
-      <div class="ench-row">
-        <span class="ench-name">Chaveiro</span>
-        <span class="ench-lvl" id="e-keychain-lvl">0</span>
-      </div>
-      <div class="ench-row">
-        <span class="ench-name" style="color:#ff7700">🔴 Laser</span>
-        <span class="ench-lvl" id="e-laser-lvl">0</span>
-      </div>
-      <div class="ench-row">
-        <span class="ench-name" style="color:#ff4444">🔥 Frenzy</span>
-        <span class="ench-lvl" id="e-frenzy-lvl">0</span>
-      </div>
-      <div class="ench-row">
-        <span class="ench-name" style="color:#ffaa00">💎 Tesouro</span>
-        <span class="ench-lvl" id="e-jackpot-lvl">0</span>
-      </div>
-      <div class="ench-row">
-        <span class="ench-name" style="color:#aaaaff">🧲 Ímã</span>
-        <span class="ench-lvl" id="e-magnet-lvl">0</span>
-      </div>
-      <div class="ench-row">
-        <span class="ench-name" style="color:#88eeee">⚡ Relâmpago</span>
-        <span class="ench-lvl" id="e-lightning-lvl">0</span>
-      </div>
-      <div class="ench-row">
-        <span class="ench-name" style="color:#00ccff">🐬 Golfinho</span>
-        <span class="ench-lvl" id="e-golfinho-lvl">0</span>
-      </div>
+      <button class="ench-toggle-btn" id="ench-toggle-btn" onclick="toggleEnchExtra()">▼ Ver todos</button>
     </div>
 
     <!-- Mine upgrade -->
@@ -5077,6 +5166,62 @@ function switchTab(tab) {
   }
 }
 
+// ── ENCHANTMENT COLLAPSE ──────────────────────────────────────────────────
+function toggleEnchExtra() {
+  const extra = document.getElementById('ench-extra');
+  const btn   = document.getElementById('ench-toggle-btn');
+  const open  = extra.classList.toggle('open');
+  btn.textContent = open ? '▲ Recolher' : '▼ Ver todos';
+}
+
+// ── CHAT GLOBAL ───────────────────────────────────────────────────────────
+let _chatCollapsed = false;
+
+function toggleChat() {
+  _chatCollapsed = !_chatCollapsed;
+  const body = document.getElementById('chat-body');
+  const icon = document.getElementById('chat-toggle-icon');
+  body.classList.toggle('collapsed', _chatCollapsed);
+  icon.textContent = _chatCollapsed ? '▼' : '▲';
+}
+
+function sendChat() {
+  const input = document.getElementById('chat-input');
+  const text  = (input.value || '').trim();
+  if (!text) return;
+  if (!window._fbUser) { showToast('Faca login para usar o chat!'); return; }
+  input.value = '';
+  if (window.sendChatMessage) window.sendChatMessage(text);
+}
+
+window._renderChat = function(msgs) {
+  const el = document.getElementById('chat-messages');
+  if (!el) return;
+  const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+  el.innerHTML = msgs.length === 0
+    ? '<div class="chat-msg chat-msg-system">Nenhuma mensagem ainda. Seja o primeiro!</div>'
+    : msgs.map(m => {
+        const name = (m.name || 'Anonimo').slice(0, 20);
+        const text = (m.text || '').slice(0, 120)
+          .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+        const isMe = window._fbUser && m.uid === window._fbUser.uid;
+        return `<div class="chat-msg" style="${isMe ? 'opacity:0.8' : ''}">
+          <span class="chat-msg-name" style="${isMe ? 'color:#6edc7a' : ''}">${name}:</span>
+          <span class="chat-msg-text">${text}</span>
+        </div>`;
+      }).join('');
+  if (atBottom) el.scrollTop = el.scrollHeight;
+};
+
+// Inicia o chat quando o Firebase estiver pronto
+(function waitForChat() {
+  if (window.initChat) {
+    window.initChat();
+  } else {
+    setTimeout(waitForChat, 300);
+  }
+})();
+
 init();
 // Safety net: if something throws after init starts, still try to show the game
 window.addEventListener('error', (e) => {
@@ -5127,5 +5272,23 @@ window.addEventListener('error', (e) => {
 })();
 
 </script>
+<!-- CHAT GLOBAL -->
+<div id="chat-widget">
+  <div id="chat-header" onclick="toggleChat()">
+    <span id="chat-header-title">💬 Chat Global</span>
+    <span id="chat-toggle-icon">▲</span>
+  </div>
+  <div id="chat-body">
+    <div id="chat-messages">
+      <div class="chat-msg chat-msg-system">Conectando ao chat...</div>
+    </div>
+    <div id="chat-input-row">
+      <input id="chat-input" type="text" placeholder="Mensagem..." maxlength="120"
+        onkeydown="if(event.key==='Enter') sendChat()">
+      <button id="chat-send-btn" onclick="sendChat()">Enviar</button>
+    </div>
+  </div>
+</div>
+
 </body>
 </html>
