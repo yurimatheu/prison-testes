@@ -332,7 +332,7 @@
 
   /* Chat widget */
   #chat-widget {
-    position: fixed; bottom: 0; right: 16px; width: 300px; z-index: 8000;
+    position: fixed; bottom: 0; left: 16px; width: 300px; z-index: 8000;
     display: flex; flex-direction: column;
     border-radius: 10px 10px 0 0; overflow: hidden;
     box-shadow: 0 -4px 24px rgba(0,0,0,0.5);
@@ -1247,10 +1247,11 @@
     </div>
     <div id="lb-status" style="font-size:11px;color:var(--muted);margin-bottom:8px;"></div>
     <!-- Tabs -->
-    <div style="display:flex;gap:6px;margin-bottom:10px;">
+    <div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap;">
       <button class="hud-btn lb-tab active" id="tab-gems"   onclick="showLBTab('gems')">💎 Gemas</button>
       <button class="hud-btn lb-tab"         id="tab-blocks" onclick="showLBTab('blocks')">⛏️ Blocos</button>
       <button class="hud-btn lb-tab"         id="tab-coins"  onclick="showLBTab('coins')">🪙 Coins</button>
+      <button class="hud-btn lb-tab"         id="tab-rubi"   onclick="showLBTab('rubi')">💠 Rubi</button>
     </div>
     <div id="lb-content"></div>
     <div style="margin-top:10px;text-align:center;">
@@ -1402,7 +1403,7 @@
     <button class="modal-close" onclick="closeModal('modal-rebirth')">×</button>
     <h2 style="color:#ff6ab0">♻️ Rebirth</h2>
     <div style="font-size:12px;color:var(--muted);margin-bottom:12px;line-height:1.6">
-      Rebirth reseta tudo (exceto Brainrots, Skins, Encantamentos) em troca de um multiplicador permanente de Coins e Gemas. Rubi 💠 é obtido na <b style="color:#e84393">⚔️ Gaiola</b> matando mobs!
+      Rebirth reseta rank, coins, picareta e <b style="color:#ff6ab0">todos os seus Brainrots</b> em troca de um multiplicador permanente de Coins e Gemas. Rubi 💠 é obtido na <b style="color:#e84393">⚔️ Gaiola</b> matando mobs!
     </div>
     <div style="background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:8px 12px;margin-bottom:12px;font-size:12px;">
       <div>Rebirth atual: <b id="rebirth-count-modal" style="color:#ff6ab0">0</b></div>
@@ -1444,13 +1445,11 @@
     <span id="hud-username" style="font-size:12px;color:var(--accent);font-weight:800">👤</span>
     <button id="hud-cloud-save">☁️ Salvar</button>
     <button id="hud-logout">🚪 Sair</button>
-    <button class="hud-btn warn" onclick="sellAll()">💰 Vender Tudo</button>
-    <button class="hud-btn" onclick="openModal('modal-ench')">✨ Encantar</button>
+    <button class="hud-btn warn" onclick="openModal('modal-ench')">✨ Encantar</button>
     <button class="hud-btn" onclick="openModal('modal-inv')">🎒 Inv</button>
     <button class="hud-btn" onclick="openModal('modal-lb')">📊 LB</button>
     <button class="hud-btn" onclick="saveGame();showToast('💾 Salvo!')" title="Salvar agora">💾</button>
     <button class="hud-btn" onclick="openDailyReward()" title="Recompensa Diária" id="daily-btn">🎁</button>
-    <button class="hud-btn" onclick="openQuests()">🎯 Missões</button>
     <button class="hud-btn" style="border-color:#e84393;color:#ff6ab0" onclick="openRebirth()">♻️ Rebirth</button>
   </div>
 
@@ -1857,7 +1856,7 @@ const ENCH_DATA = [
   { key:'magnet',   name:'🧲 Ímã',       max:30,   unit:'💎 gemas', desc:'Chance de dobrar coins do bloco atual' },
   { key:'lightning',name:'⚡ Relâmpago', max:20,   unit:'💎 gemas', desc:'Chance de quebrar área 5×5' },
   { key:'golfinho', name:'🐬 Golfinho',  max:3000, unit:'💎 gemas', desc:'+200% XP de rank por nível 1000 (máx +600%). Custo total full: 100 Ss' },
-  { key:'nuclear',  name:'☢️ Nuclear',   max:100,  unit:'💠 rubi',  desc:'Quebra TODOS os blocos da mina de uma vez! Custa Rubi. Custo inicial: 15 💠, +0.01 por nível' },
+  { key:'nuclear',  name:'☢️ Nuclear',   max:100,  unit:'💠 rubi',  desc:'Chance de quebrar TODOS os blocos da mina ao minar! Ativa automaticamente por sorte. Custa Rubi. Custo inicial: 15 💠, +0.01 por nível' },
 ];
 
 // Coin and gem bonus per pickaxe tier (multiplier applied in collectBlock)
@@ -2300,7 +2299,7 @@ function mineBlock(idx, el) {
   }
 
   // JACKPOT TESOURO — chance baixa, dá 10 keys
-  if (G.jackpot > 0 && Math.random() < G.jackpot * 0.0005) {
+  if (G.jackpot > 0 && Math.random() < G.jackpot * 0.00015) {
     G.keys += 10;
     G.totalJackpots++;
     spawnFloat(`💎 TESOURO! +10 🔑`, window.innerWidth/2, window.innerHeight/2, '#f5c842');
@@ -2311,6 +2310,11 @@ function mineBlock(idx, el) {
   // FRENZY
   if (!G.frenzyActive && G.frenzy > 0 && Math.random() < G.frenzy * 0.002) {
     activateFrenzy();
+  }
+
+  // NUCLEAR — ativa por chance ao minar (sem botão manual)
+  if (G.nuclear > 0 && Math.random() < G.nuclear * 0.00003) {
+    activateNuclear();
   }
 
   if (isExplo) {
@@ -2442,7 +2446,7 @@ function collectBlock(b, el, idx) {
   const rebirthBonus = getRebirthMult();
 
   const coins = Math.floor(b.coinBase * fortuneMult * skinCoinMult * boosterMult * prestigeMult * rankMult * midasCoinMult * pickCoinBonus * vipMult * (G._comboMult||1) * brainrotBonus.coin * rebirthBonus.coin);
-  const gems  = Math.floor(b.gemBase  * multiMult  * skinGemMult * boosterMult * prestigeMult * rankMult * midasGemMult * pickGemBonus * vipMult * (G._comboMult||1) * brainrotBonus.gem * rebirthBonus.gem);
+  const gems  = Math.floor(b.gemBase  * multiMult  * skinGemMult * boosterMult * prestigeMult * rankMult * midasGemMult * pickGemBonus * vipMult * (G._comboMult||1) * brainrotBonus.gem * rebirthBonus.gem * 1.15);
 
   G.coins += coins;
   G.gems  += gems;
@@ -2814,7 +2818,6 @@ function renderEnchModal() {
           <button class="btn-buy" ${maxed ? 'disabled' : ''} onclick="upgradeEnch('nuclear');renderEnchModal()" style="border-color:#ff4400;color:#ff6633;background:linear-gradient(135deg,#1a0500,#3a1000)">
             ${maxed ? 'MAX' : '+1 💠'+rubiCost}
           </button>
-          ${lvl > 0 ? `<button class="btn-buy" style="background:linear-gradient(135deg,#1a0000,#3a0000);border-color:#ff4400;color:#ff4400;font-size:11px;padding:4px 8px" onclick="activateNuclear()">☢️ ATIVAR!</button>` : ''}
           <button style="display:${lvl>0?'block':'none'};background:#2a0a0a;border:1px solid #8a3030;color:#e85c5c;font-size:11px;padding:3px 8px;border-radius:4px;cursor:pointer;width:100%" onclick="disenchant('nuclear');renderEnchModal()">🔨</button>
         </div>`;
     } else {
@@ -3425,6 +3428,7 @@ function submitScore() {
     gems:      G.totalGems,
     blocks:    G.totalBlocks,
     coins:     G.totalCoins,
+    rubi:      G.totalRubi || 0,
     rank:      G.rank,
     prestiges: G.prestiges,
     ts:        Date.now()
@@ -3438,6 +3442,7 @@ function submitScore() {
       gems:      Math.max(ex.gems,      entry.gems),
       blocks:    Math.max(ex.blocks,    entry.blocks),
       coins:     Math.max(ex.coins,     entry.coins),
+      rubi:      Math.max(ex.rubi||0,   entry.rubi||0),
       rank:      Math.max(ex.rank,      entry.rank),
       prestiges: Math.max(ex.prestiges, entry.prestiges),
     };
@@ -3468,8 +3473,8 @@ function showLBTab(tab) {
 function renderLBContent() {
   const myName = getLBPlayerName();
   const sorted = [...G_LB_DATA].sort((a,b) => b[G_LB_TAB] - a[G_LB_TAB]);
-  const icons = { gems:'💎', blocks:'⛏️', coins:'🪙' };
-  const colors = { gems:'var(--gem)', blocks:'var(--xp)', coins:'var(--coin)' };
+  const icons = { gems:'💎', blocks:'⛏️', coins:'🪙', rubi:'💠' };
+  const colors = { gems:'var(--gem)', blocks:'var(--xp)', coins:'var(--coin)', rubi:'#e84393' };
   const posLabels = ['🥇','🥈','🥉'];
 
   const c = document.getElementById('lb-content');
@@ -3867,7 +3872,7 @@ setInterval(saveGame, 5000);
 function activateNuclear() {
   if (!G.nuclear || G.nuclear <= 0) { showToast('☢️ Você não tem o encantamento Nuclear!'); return; }
   const rubiCost = Math.ceil(15 + G.nuclear * 0.01);
-  if ((G.rubi||0) < rubiCost) { showToast(`☢️ Nuclear precisa de 💠 ${rubiCost} Rubi!`); return; }
+  if ((G.rubi||0) < rubiCost) { return; } // sem Rubi suficiente — ignora silenciosamente (chance trigger)
   G.rubi -= rubiCost;
   let count = 0;
   G.blocks.forEach((b, i) => {
@@ -4614,7 +4619,7 @@ const BRAINROT_SHOP_PRICE = {
   'épico':    150000000,      // 150M
   'lendário': 1000000000,     // 1B
   'mítico':   8000000000,     // 8B
-  'celestial':60000000000,    // 60B
+  'celestial':500000000000,   // 500B (era 60B — aumentado)
 };
 
 const BRAINROT_SHOP_SIZE = 5;         // quantos brainrots aparecem por vez
@@ -4814,7 +4819,7 @@ function doRebirth(tier) {
       <div style="font-size:18px;font-weight:900;color:#ff6ab0;margin-bottom:12px">Confirmar Rebirth ${tier}?</div>
       <div style="font-size:13px;color:#f5c842;margin-bottom:6px">Custo: 🪙 ${fmt(t.costCoins)} + 💠 ${t.costRubi} Rubi</div>
       <div style="font-size:13px;color:#6edc7a;margin-bottom:6px">Bônus: ×${t.coinMult.toFixed(2)} Coins e Gemas PERMANENTE</div>
-      <div style="font-size:12px;color:#e85c5c;margin-bottom:16px">⚠️ Vai resetar: rank, coins e picareta</div>
+      <div style="font-size:12px;color:#e85c5c;margin-bottom:16px">⚠️ Vai resetar: rank, coins, picareta e todos os Brainrots</div>
       <div style="display:flex;gap:10px;justify-content:center">
         <button onclick="confirmRebirth()" style="flex:1;padding:12px;border-radius:8px;font-weight:900;font-size:14px;cursor:pointer;
           background:linear-gradient(135deg,#3a0030,#8a0060);border:2px solid #e84393;color:#ff6ab0;">
@@ -4842,10 +4847,15 @@ function confirmRebirth() {
   G.rank = 1; G.xp = 0;
   G.coins = 0;
   G.pickIndex = 0; G.pickHP = 0;
+  // Rebirth da Gaiola: reseta apenas brainrots do inventário
+  G.brainrotInventory = [];
+  G.brainrotSlots = [null,null,null,null,null,null,null,null];
+  G.brainrotPending = 0;
   _rebirthPendingTier = 0;
   spawnFloat('♻️ REBIRTH ' + tier + '!', window.innerWidth/2, window.innerHeight/2, '#ff6ab0');
-  showToast('♻️ Rebirth ' + tier + ' completo! ×' + t.coinMult.toFixed(2) + ' permanente!');
+  showToast('♻️ Rebirth ' + tier + ' completo! ×' + t.coinMult.toFixed(2) + ' permanente! (Brainrots resetados)');
   updateHUD(); updateRankUI(); updatePickUI();
+  renderBrainrotSlots();
   renderRebirthModal();
   saveGame();
 }
@@ -4956,23 +4966,23 @@ function equipPorrete(tier) {
 // Tier 0 = sem porrete, Tier 1-8 = Porrete 1-8
 const ARENA_BOSS_TIERS = [
   // tier 0 — sem porrete
-  { name:'Rato da Prisão',      icon:'🐀', maxHp:10,    rubiDrop:3,    xpDrop:2,   respawnSecs:5,   color:'#888' },
+  { name:'Rato da Prisão',      icon:'🐀', maxHp:4,     rubiDrop:3,    xpDrop:2,   respawnSecs:5,   color:'#888' },
   // tier 1 — Porrete 1
-  { name:'Guarda Novato',       icon:'💂', maxHp:30,    rubiDrop:8,    xpDrop:5,   respawnSecs:12,  color:'#4488ff' },
+  { name:'Guarda Novato',       icon:'💂', maxHp:12,    rubiDrop:8,    xpDrop:5,   respawnSecs:12,  color:'#4488ff' },
   // tier 2 — Porrete 2
-  { name:'Cão Bravo',           icon:'🐕', maxHp:100,   rubiDrop:20,   xpDrop:15,  respawnSecs:25,  color:'#88cc44' },
+  { name:'Cão Bravo',           icon:'🐕', maxHp:40,    rubiDrop:20,   xpDrop:15,  respawnSecs:25,  color:'#88cc44' },
   // tier 3 — Porrete 3
-  { name:'Preso Boxeador',      icon:'🥊', maxHp:350,   rubiDrop:50,   xpDrop:40,  respawnSecs:45,  color:'#c97cf5' },
+  { name:'Preso Boxeador',      icon:'🥊', maxHp:140,   rubiDrop:50,   xpDrop:40,  respawnSecs:45,  color:'#c97cf5' },
   // tier 4 — Porrete 4
-  { name:'Chefe do Bloco',      icon:'👹', maxHp:1200,  rubiDrop:120,  xpDrop:100, respawnSecs:90,  color:'#f5c842' },
+  { name:'Chefe do Bloco',      icon:'👹', maxHp:480,   rubiDrop:120,  xpDrop:100, respawnSecs:90,  color:'#f5c842' },
   // tier 5 — Porrete 5
-  { name:'Diretor Corrupto',    icon:'😈', maxHp:5000,  rubiDrop:350,  xpDrop:250, respawnSecs:180, color:'#ff6ab0' },
+  { name:'Diretor Corrupto',    icon:'😈', maxHp:2000,  rubiDrop:350,  xpDrop:250, respawnSecs:180, color:'#ff6ab0' },
   // tier 6 — Porrete 6
-  { name:'Carrasco da Gaiola',  icon:'🪖', maxHp:20000, rubiDrop:900,  xpDrop:600, respawnSecs:300, color:'#ff4444' },
+  { name:'Carrasco da Gaiola',  icon:'🪖', maxHp:8000,  rubiDrop:900,  xpDrop:600, respawnSecs:300, color:'#ff4444' },
   // tier 7 — Porrete 7
-  { name:'Titã do Presídio',    icon:'👾', maxHp:80000, rubiDrop:2500, xpDrop:1500,respawnSecs:480, color:'#ff8800' },
+  { name:'Titã do Presídio',    icon:'👾', maxHp:32000, rubiDrop:2500, xpDrop:1500,respawnSecs:480, color:'#ff8800' },
   // tier 8 — Porrete 8
-  { name:'O Ceifador',          icon:'💀', maxHp:350000,rubiDrop:8000, xpDrop:5000,respawnSecs:720, color:'#cc00ff' },
+  { name:'O Ceifador',          icon:'💀', maxHp:140000,rubiDrop:8000, xpDrop:5000,respawnSecs:720, color:'#cc00ff' },
 ];
 
 const ARENA_COUNT_BASE = 9; // instâncias base por boss
@@ -5176,6 +5186,7 @@ function toggleEnchExtra() {
 
 // ── CHAT GLOBAL ───────────────────────────────────────────────────────────
 let _chatCollapsed = false;
+let _chatLastSent = 0;
 
 function toggleChat() {
   _chatCollapsed = !_chatCollapsed;
@@ -5190,6 +5201,13 @@ function sendChat() {
   const text  = (input.value || '').trim();
   if (!text) return;
   if (!window._fbUser) { showToast('Faca login para usar o chat!'); return; }
+  const now = Date.now();
+  const elapsed = (now - _chatLastSent) / 1000;
+  if (elapsed < 5) {
+    showToast(`⏳ Aguarde ${Math.ceil(5 - elapsed)}s para enviar outra mensagem!`);
+    return;
+  }
+  _chatLastSent = now;
   input.value = '';
   if (window.sendChatMessage) window.sendChatMessage(text);
 }
