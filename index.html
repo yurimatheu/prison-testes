@@ -180,6 +180,58 @@
     });
   };
 
+  // ── SINGLE-USE KEY SYSTEM (Firebase-backed, key vanishes after 1 use) ──────
+  // Admin credentials (only you know these)
+  const ADMIN_USER = 'admin_prison';
+  const ADMIN_PASS = 'PrisonMine2025!';
+
+  // Generate a random key string
+  function _genKeyStr() {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    const seg = () => Array.from({length:5}, () => chars[Math.floor(Math.random()*chars.length)]).join('');
+    return `KEY-${seg()}-${seg()}-${seg()}-${seg()}`;
+  }
+
+  // Admin: create a new single-use key stored in Firestore
+  window.adminCreateKey = async function(adminUser, adminPass, keyType) {
+    if (adminUser !== ADMIN_USER || adminPass !== ADMIN_PASS) {
+      return { ok: false, msg: '❌ Credenciais de admin incorretas!' };
+    }
+    const keyStr = _genKeyStr();
+    try {
+      await setDoc(doc(db, 'singlekeys', keyStr), {
+        type: keyType || 'vip',   // 'vip' or any future type
+        used: false,
+        usedBy: null,
+        usedAt: null,
+        createdAt: serverTimestamp()
+      });
+      return { ok: true, key: keyStr };
+    } catch(e) { return { ok: false, msg: '❌ Erro ao criar key: ' + e.message }; }
+  };
+
+  // Player: redeem a single-use key — returns { ok, type, msg }
+  window.redeemSingleKey = async function(keyStr) {
+    if (!window._fbUser) return { ok: false, msg: '❌ Faça login primeiro!' };
+    keyStr = keyStr.trim().toUpperCase();
+    if (!keyStr) return { ok: false, msg: '❌ Key vazia!' };
+    try {
+      const ref  = doc(db, 'singlekeys', keyStr);
+      const snap = await getDoc(ref);
+      if (!snap.exists()) return { ok: false, msg: '❌ Key inválida ou inexistente!' };
+      const data = snap.data();
+      if (data.used) return { ok: false, msg: '❌ Esta key já foi usada!' };
+      // Mark as used (atomic write)
+      await setDoc(ref, {
+        ...data,
+        used: true,
+        usedBy: window._fbUser.uid,
+        usedAt: serverTimestamp()
+      });
+      return { ok: true, type: data.type || 'vip' };
+    } catch(e) { return { ok: false, msg: '❌ Erro: ' + e.message }; }
+  };
+
   // Signal ready for the classic-script event wiring
   window._firebaseReady = true;
 </script>
@@ -1808,6 +1860,9 @@ const G = {
   // Quests
   quests: null,
 
+  // Enchant toggle — disabled enchants don't fire even if leveled up
+  enchDisabled: {},
+
   // Stats
   sessionStart: Date.now(),
   totalPlayTime: 0,
@@ -2193,26 +2248,43 @@ function renderGrid() {
 // Delegação de eventos — 1 listener no grid em vez de 1 por bloco
 function setupGridEvents() {
   const grid = getGrid();
+
+  // pointerdown: start mining immediately
   grid.addEventListener('pointerdown', (e) => {
     const el = e.target.closest('.block:not(.empty)');
     if (!el) return;
     e.preventDefault();
     G._holdMining = true;
+    grid.setPointerCapture(e.pointerId);
     mineBlock(+el.dataset.idx, el);
   });
-  grid.addEventListener('pointerenter', (e) => {
+
+  // pointermove on the grid (capture released so works across children)
+  grid.addEventListener('pointermove', (e) => {
     if (!G._holdMining) return;
-    const el = e.target.closest('.block:not(.empty)');
-    if (!el) return;
     e.preventDefault();
-    mineBlock(+el.dataset.idx, el);
-  }, true);
+    // elementFromPoint gives us the actual element under the pointer
+    const target = document.elementFromPoint(e.clientX, e.clientY);
+    if (!target) return;
+    const el = target.closest('.block:not(.empty)');
+    if (!el) return;
+    const idx = +el.dataset.idx;
+    if (isNaN(idx)) return;
+    // Throttle: don't mine same block twice in a row
+    if (G._lastMinedIdx === idx) return;
+    G._lastMinedIdx = idx;
+    mineBlock(idx, el);
+  }, { passive: false });
+
+  grid.addEventListener('pointerup',     () => { G._holdMining = false; G._lastMinedIdx = -1; });
+  grid.addEventListener('pointercancel', () => { G._holdMining = false; G._lastMinedIdx = -1; });
 }
 
 // Global hold-mining state
 G._holdMining = false;
-document.addEventListener('pointerup', () => { G._holdMining = false; });
-document.addEventListener('pointercancel', () => { G._holdMining = false; });
+G._lastMinedIdx = -1;
+document.addEventListener('pointerup',     () => { G._holdMining = false; G._lastMinedIdx = -1; });
+document.addEventListener('pointercancel', () => { G._holdMining = false; G._lastMinedIdx = -1; });
 
 // ============================================================
 // MINING
@@ -2241,7 +2313,7 @@ function mineBlock(idx, el) {
   let isExplo = false;
   // Elétrica skin: explode 3x3 com 10% de chance
   const elecBonus = (G.equippedSkin === 'elec' && Math.random() < 0.10);
-  if (elecBonus || (G.explo > 0 && Math.random() < G.explo * 0.001)) {
+  if (elecBonus || (G.explo > 0 && !G.enchDisabled?.explo && Math.random() < G.explo * 0.001)) {
     isExplo = true;
     // Show ring
     const ring = document.createElement('div');
@@ -2259,7 +2331,7 @@ function mineBlock(idx, el) {
   G.totalBlocks++;
 
   // LASER: quebra fileira inteira
-  if (!isExplo && G.laser > 0 && Math.random() < G.laser * 0.00005) {
+  if (!isExplo && G.laser > 0 && !G.enchDisabled?.laser && Math.random() < G.laser * 0.00005) {
     const laserRow = Math.floor(idx / G.gridSize);
     for (let lc = 0; lc < G.gridSize; lc++) {
       const li = laserRow * G.gridSize + lc;
@@ -2272,7 +2344,7 @@ function mineBlock(idx, el) {
   }
 
   // LIGHTNING: quebra área 5×5
-  if (!isExplo && G.lightning > 0 && Math.random() < G.lightning * 0.003) {
+  if (!isExplo && G.lightning > 0 && !G.enchDisabled?.lightning && Math.random() < G.lightning * 0.003) {
     const lrow = Math.floor(idx / G.gridSize), lcol = idx % G.gridSize;
     for (let dr = -2; dr <= 2; dr++) {
       for (let dc = -2; dc <= 2; dc++) {
@@ -2289,7 +2361,7 @@ function mineBlock(idx, el) {
   }
 
   // MAGNET: chance de dobrar os coins coletados do bloco
-  if (G.magnet > 0 && Math.random() < G.magnet * 0.025) {
+  if (G.magnet > 0 && !G.enchDisabled?.magnet && Math.random() < G.magnet * 0.025) {
     const bonus = Math.floor(b.coinBase * (1 + G.fortune * 0.1) * (1 + (G.rank-1)*0.02) * (1 + G.prestiges*0.25));
     G.coins += bonus; G.totalCoins += bonus;
     if (el) {
@@ -2299,7 +2371,7 @@ function mineBlock(idx, el) {
   }
 
   // JACKPOT TESOURO — chance baixa, dá 10 keys
-  if (G.jackpot > 0 && Math.random() < G.jackpot * 0.00015) {
+  if (G.jackpot > 0 && !G.enchDisabled?.jackpot && Math.random() < G.jackpot * 0.00015) {
     G.keys += 10;
     G.totalJackpots++;
     spawnFloat(`💎 TESOURO! +10 🔑`, window.innerWidth/2, window.innerHeight/2, '#f5c842');
@@ -2308,12 +2380,12 @@ function mineBlock(idx, el) {
   }
 
   // FRENZY
-  if (!G.frenzyActive && G.frenzy > 0 && Math.random() < G.frenzy * 0.002) {
+  if (!G.frenzyActive && G.frenzy > 0 && !G.enchDisabled?.frenzy && Math.random() < G.frenzy * 0.002) {
     activateFrenzy();
   }
 
   // NUCLEAR — ativa por chance ao minar (sem botão manual)
-  if (G.nuclear > 0 && Math.random() < G.nuclear * 0.00003) {
+  if (G.nuclear > 0 && !G.enchDisabled?.nuclear && Math.random() < G.nuclear * 0.00003) {
     activateNuclear();
   }
 
@@ -2434,9 +2506,9 @@ function collectBlock(b, el, idx) {
   }
 
   const vipMult = G.vipActive ? 1.1 : 1;
-  const fortuneMult = 1 + G.fortune * 0.1;
+  const fortuneMult = 1 + (G.enchDisabled?.fortune ? 0 : G.fortune * 0.1);
   // Multiplicador de gemas (multi encantamento)
-  const multiMult = 1 + G.multi * 0.05 + Math.pow(G.multi * 0.03, 1.8);
+  const multiMult = G.enchDisabled?.multi ? 1 : (1 + G.multi * 0.05 + Math.pow(G.multi * 0.03, 1.8));
   // Bônus da picareta (por tier)
   const pickCoinBonus = PICK_COIN_BONUS[G.pickIndex] || 1;
   const pickGemBonus  = PICK_GEM_BONUS[G.pickIndex]  || 1;
@@ -2463,7 +2535,7 @@ function collectBlock(b, el, idx) {
   // (moved to brainrot tick)
 
   // Check Midas trigger — chance reduzida (era 0.002, agora 0.0006)
-  if (!G.midasActive && G.midas > 0 && Math.random() < G.midas * 0.0004) {
+  if (!G.midasActive && G.midas > 0 && !G.enchDisabled?.midas && Math.random() < G.midas * 0.0004) {
     activateMidas();
   }
 
@@ -2476,7 +2548,7 @@ function collectBlock(b, el, idx) {
     }
   }
   // Key chance from Chaveiro enchant (0.25% per level)
-  if (G.keychain > 0 && Math.random() < G.keychain * 0.0025) {
+  if (G.keychain > 0 && !G.enchDisabled?.keychain && Math.random() < G.keychain * 0.0025) {
     G.keys++;
     if (el) {
       const rect = el.getBoundingClientRect();
@@ -2821,9 +2893,12 @@ function renderEnchModal() {
           <button style="display:${lvl>0?'block':'none'};background:#2a0a0a;border:1px solid #8a3030;color:#e85c5c;font-size:11px;padding:3px 8px;border-radius:4px;cursor:pointer;width:100%" onclick="disenchant('nuclear');renderEnchModal()">🔨</button>
         </div>`;
     } else {
+      const isOff = !!(G.enchDisabled && G.enchDisabled[ed.key]);
       div.innerHTML = `
         <div class="s-info">
-          <div class="s-name">✨ ${ed.name} <span style="color:var(--accent)">[${lvl}/${ed.max}]</span></div>
+          <div class="s-name">✨ ${ed.name} <span style="color:var(--accent)">[${lvl}/${ed.max}]</span>
+            ${lvl > 0 ? `<span style="font-size:10px;padding:1px 5px;border-radius:3px;margin-left:4px;background:${isOff?'#3a0a0a':'#0a2a0a'};color:${isOff?'#e85c5c':'#6edc7a'}">${isOff?'⛔ OFF':'✅ ON'}</span>` : ''}
+          </div>
           <div class="s-desc">${ed.desc}</div>
           <div class="s-cost">${costDisplay}</div>
         </div>
@@ -2832,7 +2907,8 @@ function renderEnchModal() {
             ${maxed ? 'MAX' : '+1'}
           </button>
           ${!maxed ? `<button class="btn-buy" style="background:linear-gradient(135deg,#1a3a3a,#2a6060);border-color:#48c9e8;color:#48c9e8;font-size:10px;padding:3px 6px" onclick="upgradeEnchToMax('${ed.key}')">💎 Gastar Tudo</button>` : ''}
-          <button style="display:${lvl>0?'block':'none'};background:#2a0a0a;border:1px solid #8a3030;color:#e85c5c;font-size:11px;padding:3px 8px;border-radius:4px;cursor:pointer;width:100%" onclick="disenchant('${ed.key}');renderEnchModal()">🔨</button>
+          ${lvl > 0 ? `<button style="background:${isOff?'#0a2a0a':'#2a0a0a'};border:1px solid ${isOff?'#3a8a3a':'#ff8800'};color:${isOff?'#6edc7a':'#ff8800'};font-size:11px;padding:3px 8px;border-radius:4px;cursor:pointer;width:100%" onclick="toggleEnchant('${ed.key}')">${isOff?'✅ Ativar':'⛔ Desativar'}</button>` : ''}
+          <button style="display:${lvl>0?'block':'none'};background:#2a0a0a;border:1px solid #8a3030;color:#e85c5c;font-size:11px;padding:3px 8px;border-radius:4px;cursor:pointer;width:100%" onclick="disenchant('${ed.key}');renderEnchModal()">🔨 -1 nível</button>
         </div>`;
     }
     c.appendChild(div);
@@ -3701,7 +3777,7 @@ const SAVE_KEYS = [
   'bankBalance','bankLastCollect','lastDailyClaim','dailyStreak',
   'totalPlayTime','totalMidasActivations','totalBossesKilled','totalJackpots','totalEventsTriggered',
   'rubi','totalRubi','rebirthCount','rebirthMult','brainrotInventory','brainrotSlots','rngBoxTimers',
-  'porretes','equippedPorrete','arenaMobs','brainrotPending','specialBoxTimers',
+  'porretes','equippedPorrete','arenaMobs','brainrotPending','specialBoxTimers','enchDisabled',
 ];
 const SAVE_KEY = 'prisonMine_v11_save';
 // Todas as chaves antigas para recuperacao automatica entre versoes
@@ -3780,6 +3856,7 @@ function loadGame() {
     // v18 fields
     if (!G.brainrotPending) G.brainrotPending = 0;
     if (!G.specialBoxTimers) G.specialBoxTimers = {normal:0, rara:0, epica:0, lendaria:0, celestial:0};
+    if (!G.enchDisabled) G.enchDisabled = {};
   } catch(e) { 
     console.warn('Load failed, trying backup:', e);
     try {
@@ -4348,22 +4425,18 @@ function disenchant(key) {
   saveGame();
 }
 
+function toggleEnchant(key) {
+  if (!G.enchDisabled) G.enchDisabled = {};
+  G.enchDisabled[key] = !G.enchDisabled[key];
+  const ed = ENCH_DATA.find(e => e.key === key);
+  const state = G.enchDisabled[key] ? '⛔ DESATIVADO' : '✅ ATIVADO';
+  showToast(`${ed ? ed.name : key}: ${state}`);
+  renderEnchModal();
+  saveGame();
+}
 // ============================================================
-// VIP
+// VIP — Single-use Firebase keys (one use per key, then vanishes)
 // ============================================================
-const VIP_KEYS = [
-  'VIP-HYVVS-8YZPX-H6GFM-OQCNU',
-  'VIP-TUVPG-JJXRV-27DCG-WLXON',
-  'VIP-0UWTA-GV3YL-XCPLX-E27XF',
-  'VIP-W58RV-YMZWL-305BD-2OEY5',
-  'VIP-LI4BN-VO7PR-RZEH3-TTG64',
-  'VIP-HM56F-0SVKB-VFPY4-AOMTJ',
-  'VIP-DF9YU-Q0XT1-Y5HFJ-8VN87',
-  'VIP-FFPKQ-20SGG-5NA29-H91FH',
-  'VIP-63EZI-GOOSW-UBEJH-8HQSJ',
-  'VIP-DYKT1-ABJQ9-9549P-ERMB0'
-];
-
 function renderVIPModal() {
   const c = document.getElementById('vip-content');
   if (!c) return;
@@ -4377,30 +4450,65 @@ function renderVIPModal() {
       + '<button class="btn-buy" style="background:#2a0a0a;border-color:#8a3030;color:#e85c5c" onclick="deactivateVIP()">Desativar VIP</button>'
       + '</div>';
   } else {
-    c.innerHTML = '<div style="text-align:center;padding:8px 0 16px">'
+    c.innerHTML = '<div style="text-align:center;padding:8px 0 12px">'
       + '<div style="font-size:36px">🔒</div>'
-      + '<div style="font-size:13px;color:var(--muted);margin:8px 0 16px;line-height:1.6">VIP dá +10% em tudo!<br>Ative com uma key especial.</div>'
+      + '<div style="font-size:13px;color:var(--muted);margin:8px 0 12px;line-height:1.6">VIP dá +10% em tudo!<br>Ative com uma key especial (uso único).</div>'
       + '</div>'
-      + '<div style="font-size:12px;color:var(--muted);margin-bottom:6px">Inserir Key VIP:</div>'
-      + '<div style="display:flex;gap:8px">'
-      + '<input id="vip-input" type="text" placeholder="Cole sua key aqui..." style="flex:1;background:var(--panel2);border:1px solid #a040ff;color:var(--text);padding:8px 10px;border-radius:6px;font-size:13px">'
+      + '<div style="font-size:12px;color:var(--muted);margin-bottom:6px">🔑 Inserir Key VIP (uso único):</div>'
+      + '<div style="display:flex;gap:8px;margin-bottom:12px">'
+      + '<input id="vip-input" type="text" placeholder="KEY-XXXXX-XXXXX-XXXXX-XXXXX" style="flex:1;background:var(--panel2);border:1px solid #a040ff;color:var(--text);padding:8px 10px;border-radius:6px;font-size:12px;font-family:monospace">'
       + '<button class="btn-buy" style="border-color:#a040ff;color:#df80ff;background:linear-gradient(135deg,#2a0050,#4a0090)" onclick="tryActivateVIP()">👑 Ativar</button>'
       + '</div>'
-      + '<div style="font-size:11px;color:var(--muted);margin-top:8px">Keys VIP são fornecidas pelo administrador.</div>';
+      + '<div id="vip-key-status" style="font-size:12px;color:var(--muted);min-height:18px"></div>'
+      + '<div style="font-size:11px;color:var(--muted);margin-top:8px;border-top:1px solid var(--border);padding-top:8px">⚠️ Cada key só funciona uma vez. Após uso, a key é destruída.</div>'
+      + '<hr style="border-color:var(--border);margin:14px 0">'
+      + '<details style="font-size:12px;color:var(--muted)">'
+      + '<summary style="cursor:pointer;color:#ff8800;font-weight:800">🔧 Painel Admin (restrito)</summary>'
+      + '<div style="margin-top:10px;display:flex;flex-direction:column;gap:8px">'
+      + '<input id="adm-user" type="text" placeholder="Usuário admin" style="background:var(--panel2);border:1px solid #8b5000;color:var(--text);padding:7px 10px;border-radius:6px;font-size:12px">'
+      + '<input id="adm-pass" type="password" placeholder="Senha admin" style="background:var(--panel2);border:1px solid #8b5000;color:var(--text);padding:7px 10px;border-radius:6px;font-size:12px">'
+      + '<button class="btn-buy" style="border-color:#ff8800;color:#ffaa44;background:linear-gradient(135deg,#1a0800,#3a1a00)" onclick="adminGenerateKey()">⚡ Gerar Nova Key VIP</button>'
+      + '<div id="adm-key-result" style="font-size:13px;font-family:monospace;font-weight:800;color:#6edc7a;word-break:break-all;min-height:20px;background:var(--panel2);padding:6px 10px;border-radius:6px;border:1px solid var(--border)"></div>'
+      + '</div></details>';
   }
 }
 
-function tryActivateVIP() {
+async function tryActivateVIP() {
   const input = document.getElementById('vip-input');
+  const status = document.getElementById('vip-key-status');
   if (!input) return;
-  if (VIP_KEYS.includes(input.value.trim())) {
+  const key = input.value.trim().toUpperCase();
+  if (status) status.textContent = '⏳ Verificando key...';
+  if (!window.redeemSingleKey) {
+    if (status) status.textContent = '⏳ Firebase carregando, aguarde...';
+    return;
+  }
+  const result = await window.redeemSingleKey(key);
+  if (result.ok) {
     G.vipActive = true;
     saveGame();
     updateVIPUI();
     closeModal('modal-vip');
-    showToast('👑 VIP ATIVADO! +10% em tudo!');
+    showToast('👑 VIP ATIVADO! +10% em tudo! (Key destruída)');
   } else {
-    showToast('❌ Key VIP inválida!');
+    if (status) status.textContent = result.msg;
+    showToast(result.msg);
+  }
+}
+
+async function adminGenerateKey() {
+  const u = (document.getElementById('adm-user')?.value || '').trim();
+  const p = (document.getElementById('adm-pass')?.value || '').trim();
+  const out = document.getElementById('adm-key-result');
+  if (out) out.textContent = '⏳ Gerando...';
+  if (!window.adminCreateKey) { if (out) out.textContent = '❌ Firebase não pronto'; return; }
+  const result = await window.adminCreateKey(u, p, 'vip');
+  if (result.ok) {
+    if (out) out.textContent = result.key;
+    showToast('✅ Key gerada: ' + result.key);
+  } else {
+    if (out) out.textContent = result.msg;
+    showToast(result.msg);
   }
 }
 
