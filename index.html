@@ -80,6 +80,7 @@
         gameState: JSON.stringify(G),
         username:  window._fbUser.displayName || window._fbUser.email,
         coins:     G.coins || 0,
+        gems:      G.gems  || 0,
         rank:      G.rank  || 1,
         updatedAt: serverTimestamp()
       });
@@ -88,13 +89,14 @@
 
   window.loadLeaderboard = async function() {
     try {
-      const q    = query(collection(db, 'saves'), orderBy('coins', 'desc'), limit(10));
+      const q    = query(collection(db, 'saves'), orderBy('coins', 'desc'), limit(20));
       const snap = await getDocs(q);
       const rows = [];
       snap.forEach(d => rows.push({
         username: d.data().username,
-        coins:    d.data().coins,
-        rank:     d.data().rank
+        coins:    d.data().coins   || 0,
+        gems:     d.data().gems    || 0,
+        rank:     d.data().rank    || 1
       }));
       return rows;
     } catch(e) { return []; }
@@ -1741,6 +1743,11 @@
     <!-- Leaderboard mini -->
     <div class="panel">
       <div class="panel-title">📊 Leaderboard</div>
+      <div style="display:flex;gap:4px;margin-bottom:6px;flex-wrap:wrap">
+        <button id="lb-mini-tab-coins"  class="hud-btn lb-mini-tab active" style="font-size:10px;padding:3px 7px;border-color:var(--coin);color:var(--coin)" onclick="setLBMiniTab('coins')">🪙 Coins</button>
+        <button id="lb-mini-tab-gems"   class="hud-btn lb-mini-tab" style="font-size:10px;padding:3px 7px" onclick="setLBMiniTab('gems')">💎 Gemas</button>
+        <button id="lb-mini-tab-rank"   class="hud-btn lb-mini-tab" style="font-size:10px;padding:3px 7px" onclick="setLBMiniTab('rank')">⭐ Rank</button>
+      </div>
       <div id="lb-mini"></div>
     </div>
 
@@ -3631,6 +3638,54 @@ function renderLBContent() {
   }
 }
 
+let _lbMiniTab = 'coins';
+let _lbMiniCache = null;
+
+function setLBMiniTab(tab) {
+  _lbMiniTab = tab;
+  // Update tab buttons
+  document.querySelectorAll('.lb-mini-tab').forEach(b => {
+    const isActive = b.id === 'lb-mini-tab-' + tab;
+    b.classList.toggle('active', isActive);
+    if (isActive) {
+      const colors = { coins:'var(--coin)', gems:'var(--gem)', rank:'var(--xp)' };
+      b.style.borderColor = colors[tab] || 'var(--accent)';
+      b.style.color = colors[tab] || 'var(--accent)';
+    } else {
+      b.style.borderColor = '';
+      b.style.color = '';
+    }
+  });
+  if (_lbMiniCache) _renderLBMiniRows(_lbMiniCache);
+  else renderLBMini();
+}
+
+function _renderLBMiniRows(rows) {
+  const lb = document.getElementById('lb-mini');
+  if (!lb) return;
+  if (!rows || rows.length === 0) {
+    lb.innerHTML = `<div class="lb-row" style="font-size:11px;color:var(--muted)">Seja o primeiro! 🏆</div>`;
+    return;
+  }
+  const myName = window._fbUser?.displayName || '';
+  const medals = ['🥇','🥈','🥉','4️⃣','5️⃣'];
+
+  // Sort by selected tab
+  const tabField = _lbMiniTab; // 'coins', 'gems', or 'rank'
+  const icons    = { coins:'🪙', gems:'💎', rank:'⭐' };
+  const sorted = [...rows].sort((a, b) => (b[tabField] || 0) - (a[tabField] || 0));
+
+  lb.innerHTML = sorted.slice(0, 5).map((e, i) => {
+    const isMe = e.username === myName;
+    const val  = tabField === 'rank' ? `R${e[tabField] || 1}` : fmt(e[tabField] || 0);
+    return `<div class="lb-row" style="${isMe ? 'color:var(--accent);font-weight:800;' : ''}">
+      <span class="lb-rank">${medals[i]}</span>
+      <span class="lb-name" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:80px">${e.username}</span>
+      <span class="lb-val">${val}${icons[tabField]}</span>
+    </div>`;
+  }).join('');
+}
+
 function renderLBMini() {
   const lb = document.getElementById('lb-mini');
   if (!window.loadLeaderboard) {
@@ -3639,20 +3694,8 @@ function renderLBMini() {
   }
   lb.innerHTML = `<div class="lb-row" style="font-size:11px;color:var(--muted)">⏳ Carregando ranking...</div>`;
   window.loadLeaderboard().then(rows => {
-    if (!rows || rows.length === 0) {
-      lb.innerHTML = `<div class="lb-row" style="font-size:11px;color:var(--muted)">Seja o primeiro! 🏆</div>`;
-      return;
-    }
-    const myName = window._fbUser?.displayName || '';
-    const medals = ['🥇','🥈','🥉','4️⃣','5️⃣'];
-    lb.innerHTML = rows.slice(0,5).map((e, i) => {
-      const isMe = e.username === myName;
-      return `<div class="lb-row" style="${isMe ? 'color:var(--accent);font-weight:800;' : ''}">
-        <span class="lb-rank">${medals[i]}</span>
-        <span class="lb-name" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:90px">${e.username}</span>
-        <span class="lb-val">${fmt(e.coins)}🪙</span>
-      </div>`;
-    }).join('');
+    _lbMiniCache = rows;
+    _renderLBMiniRows(rows);
   });
 }
 
@@ -4862,6 +4905,13 @@ function buyBrainrotFromShop(bId) {
   const existing = G.brainrotInventory.find(x => x.id === b.id);
   if (existing) existing.qty++;
   else G.brainrotInventory.push({ id: b.id, qty: 1 });
+
+  // Remove este item da loja para não poder comprar de novo na mesma rotação
+  if (G.brainrotShopSlots) {
+    const idx = G.brainrotShopSlots.indexOf(bId);
+    if (idx !== -1) G.brainrotShopSlots.splice(idx, 1);
+  }
+
   const rarityColors = { comum:'#aaa', raro:'#4488ff', 'épico':'#c97cf5', 'lendário':'#f5c842', 'mítico':'#ff6ab0', celestial:'#00ffff' };
   const col = rarityColors[b.rarity] || '#aaa';
   showToast(`🧠 ${b.icon} ${b.name} (${b.rarity.toUpperCase()}) comprado!`);
